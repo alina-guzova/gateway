@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: gateway-app
+    ports:
+      - "${GATEWAY_PORT:-8090}:8090"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-app:8080}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth-app:8081}
+      - ORDER_SERVICE_URL=${ORDER_SERVICE_URL:-http://order-app:8082}
+    depends_on:
+      - user-service
+      - auth-service
+      - order-service
+
+  # ==================== AUTH SERVICE & DB ====================
+
+  auth-service-db:
+    image: postgres:17-alpine
+    container_name: auth-db
+    environment:
+      POSTGRES_DB: ${AUTH_DB_NAME:-auth_service_db}
+      POSTGRES_USER: ${AUTH_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${AUTH_DB_PASSWORD:-password}
+    ports:
+      - "${AUTH_DB_PORT:-5433}:5432"
+    volumes:
+      - pgdata_auth:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${AUTH_DB_USER:-postgres} -d ${AUTH_DB_NAME:-auth_service_db}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./authentication-service
+      dockerfile: Dockerfile
+    container_name: auth-app
+    ports:
+      - "${AUTH_APP_PORT:-8081}:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+      DB_HOST: auth-service-db
+      DB_NAME: ${AUTH_DB_NAME:-auth_service_db}
+      DB_USERNAME: ${AUTH_DB_USER:-postgres}
+      DB_PASSWORD: ${AUTH_DB_PASSWORD:-password}
+      USER_SERVICE_URL: ${USER_SERVICE_URL:-http://user-app:8080}
+    depends_on:
+      auth-service-db:
+        condition: service_healthy
+
+  # ==================== USER SERVICE, DB & REDIS ====================
+  user-service-db:
+    image: postgres:17-alpine
+    container_name: user-db
+    environment:
+      POSTGRES_DB: ${USER_DB_NAME:-user_service_db}
+      POSTGRES_USER: ${USER_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD:-password}
+    ports:
+      - "${USER_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata_user:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${USER_DB_USER:-postgres} -d ${USER_DB_NAME:-user_service_db}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  user-service-redis:
+    image: redis:7-alpine
+    container_name: user-redis
+    ports:
+      - "${USER_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: user-app
+    ports:
+      - "${USER_APP_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+      DB_HOST: user-service-db
+      DB_PORT: 5432
+      DB_NAME: ${USER_DB_NAME:-user_service_db}
+      DB_USERNAME: ${USER_DB_USER:-postgres}
+      DB_PASSWORD: ${USER_DB_PASSWORD:-password}
+      REDIS_HOST: user-service-redis
+      REDIS_PORT: 6379
+    depends_on:
+      user-service-db:
+        condition: service_healthy
+      user-service-redis:
+        condition: service_healthy
+
+  # ==================== ORDER SERVICE & DB ====================
+  order-service-db:
+    image: postgres:17-alpine
+    container_name: order-db
+    environment:
+      POSTGRES_DB: ${ORDER_DB_NAME:-order_service_db}
+      POSTGRES_USER: ${ORDER_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-password}
+    ports:
+      - "${ORDER_DB_PORT:-5434}:5432"
+    volumes:
+      - pgdata_order:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${ORDER_DB_USER:-postgres} -d ${ORDER_DB_NAME:-order_service_db}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-app
+    ports:
+      - "${ORDER_APP_PORT:-8082}:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+      DB_HOST: order-service-db
+      DB_NAME: ${ORDER_DB_NAME:-order_service_db}
+      DB_USERNAME: ${ORDER_DB_USER:-postgres}
+      DB_PASSWORD: ${ORDER_DB_PASSWORD:-password}
+      USER_SERVICE_URL: ${USER_SERVICE_URL:-http://user-app:8080}
+    depends_on:
+      order-service-db:
+        condition: service_healthy
+
+volumes:
+  pgdata_auth:
+  pgdata_user:
+  pgdata_order:
+
+networks:
+  default:
+    name: microservices-net
+    external: true
