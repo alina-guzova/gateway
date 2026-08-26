@@ -1,0 +1,23 @@
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: user-service
+          uri: ${USER_SERVICE_URL:http://user-app:8080}
+          predicates:
+            - Path=/api/v1/users/**
+
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URL:http://auth-app:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+
+        - id: order-service
+          uri: ${ORDER_SERVICE_URL:http://order-app:8082}
+          predicates:
+            - Path=/api/v1/orders/**
+
+application:
+  security:
+    jwt:
+      secret-key: ${JWT_SECRET_KEY:8ify9bC8hqNAE3Y/A4SatBDXR539wGPO3AEFMrXKQwAv8uxQmgB7rwCHLgN7c3Oe8mZbQ7s+/DhKizAqDRjkXw==}
