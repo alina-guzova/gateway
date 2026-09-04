@@ -13,10 +13,12 @@ services:
       - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-app:8080}
       - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth-app:8081}
       - ORDER_SERVICE_URL=${ORDER_SERVICE_URL:-http://order-app:8082}
+      - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL:-http://payment-app:8083}
     depends_on:
       - user-service
       - auth-service
       - order-service
+      - payment-service
 
   # ==================== AUTH SERVICE & DB ====================
 
@@ -142,10 +144,147 @@ services:
       order-service-db:
         condition: service_healthy
 
+  # ==================== PAYMENT SERVICE & DB ====================
+  payment-service-db:
+    image: mongo:7.0
+    container_name: payment-db
+    ports:
+      - "${DB_PORT:-27017}:27017"
+    command: [ "--bind_ip_all", "--replSet", "rs0" ]
+    volumes:
+      - mongo_payment:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  mongo-init:
+    image: mongo:7.0
+    depends_on:
+      payment-service-db:
+        condition: service_healthy
+    environment:
+      - DB_USERNAME=${PAYMENT_DB_USER:-mongo}
+      - DB_PASSWORD=${PAYMENT_DB_PASSWORD:-password}
+    command: >
+      mongosh --host payment-service-db --eval "
+        try {
+          rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'payment-service-db:27017' }] });
+      
+          print('Waiting for replica set to become primary...');
+          while (!db.isMaster().ismaster) {
+            sleep(1000);
+          }
+      
+          const adminDB = db.getSiblingDB('admin');
+          adminDB.createUser({
+            user: process.env.DB_USERNAME,
+            pwd: process.env.DB_PASSWORD,
+            roles: [{ role: 'root', db: 'admin' }]
+          });
+      
+          print('Replica set initialized and root user created successfully.');
+        } catch (e) {
+          print('Already initialized or error: ' + e);
+        }
+      "
+
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: payment-app
+    ports:
+      - "${PAYMENT_APP_PORT:-8083}:8083"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+      DB_HOST: payment-service-db
+      DB_PORT: 27017
+      DB_NAME: ${PAYMENT_DB_NAME:-payment_service_db}
+      DB_USERNAME: ${PAYMENT_DB_USER:-mongo}
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:-password}
+      ORDER_SERVICE_URL: ${ORDER_SERVICE_URL:-http://order-app:8082}
+      EXTERNAL_SERVICE_URL: ${EXTERNAL_SERVICE_URL:-https://api.random.org}
+      EXTERNAL_SERVICE_KEY: ${EXTERNAL_SERVICE_KEY:-02ded9b1-b168-4381-b8f2-ebd03aa62da2}
+    depends_on:
+      payment-service-db:
+        condition: service_healthy
+
+  # ==================== KAFKA CLUSTER ====================
+
+  kafka-1:
+    image: apache/kafka:latest
+    container_name: kafka-1
+    ports:
+      - "${KAFKA_1_PORT:-9092}:9092"
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://${KAFKA_1_HOST:-kafka-1}:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_LOG_RETENTION_HOURS: 24
+      CLUSTER_ID: 'Mk3OEYBSD34-WZ-XYZ123A'
+
+  kafka-2:
+    image: apache/kafka:latest
+    container_name: kafka-2
+    ports:
+      - "${KAFKA_2_PORT:-9094}:9092"
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://${KAFKA_2_HOST:-kafka-2}:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_LOG_RETENTION_HOURS: 24
+      CLUSTER_ID: 'Mk3OEYBSD34-WZ-XYZ123A'
+
+  kafka-3:
+    image: apache/kafka:latest
+    container_name: kafka-3
+    ports:
+      - "${KAFKA_3_PORT:-9095}:9092"
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://${KAFKA_3_HOST:-kafka-3}:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_LOG_RETENTION_HOURS: 24
+      CLUSTER_ID: 'Mk3OEYBSD34-WZ-XYZ123A'
+
 volumes:
   pgdata_auth:
   pgdata_user:
   pgdata_order:
+  mongo_payment:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
 
 networks:
   default:
